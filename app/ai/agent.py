@@ -82,6 +82,12 @@ async def handle_user_message(db: AsyncSession, user: User, user_text: str) -> s
     config = types.GenerateContentConfig(
         system_instruction=system_prompt,
         tools=[GEMINI_TOOLS],
+        # Gemini 3's "thinking" mode attaches a thought_signature to function
+        # call parts that must be replayed verbatim on the next turn. We manage
+        # the tool loop manually rather than via the SDK's auto-calling helper,
+        # so we don't preserve those signatures — disable thinking to avoid the
+        # 400 INVALID_ARGUMENT this otherwise causes on multi-step tool calls.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
     for _ in range(MAX_TOOL_ROUNDS):
