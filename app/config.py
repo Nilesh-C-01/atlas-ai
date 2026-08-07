@@ -1,0 +1,29 @@
+"""
+config.py
+
+Env-driven settings. Everything secret comes from the environment — Railway
+env vars in prod, a local .env (never committed) for dev.
+"""
+
+from __future__ import annotations
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    telegram_bot_token: str
+    telegram_webhook_secret: str = ""
+
+    google_api_key: str
+    finnhub_api_key: str
+
+    database_url: str
+
+    google_service_account_json: str = ""
+
+    port: int = 8000
+
+
+settings = Settings()
