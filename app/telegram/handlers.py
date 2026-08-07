@@ -7,6 +7,7 @@ wired up for day 1 — voice/image come later (locked scope, not skipped).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,8 @@ from app.ai.agent import handle_user_message
 from app.ai.prompts import ONBOARDING_KICKOFF
 from app.db.queries import get_or_create_user, save_message
 from app.telegram.client import send_message
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_update(update: dict[str, Any], db: AsyncSession) -> None:
@@ -43,6 +46,7 @@ async def handle_update(update: dict[str, Any], db: AsyncSession) -> None:
             reply = await handle_user_message(db, user, text)
         await save_message(db, user.id, "assistant", reply)
     except Exception:
+        logger.exception("Failed to handle update for chat_id=%s", chat_id)
         reply = "Something went wrong on my end — mind trying that again?"
 
     await send_message(chat_id, reply)
