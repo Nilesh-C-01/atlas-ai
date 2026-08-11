@@ -24,6 +24,12 @@ class Settings(BaseSettings):
 
     google_service_account_json: str = ""
 
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    # Whatever URL Telegram's webhook is currently reachable at (ngrok
+    # locally, Railway in prod) — used to build the OAuth redirect URI.
+    public_base_url: str = ""
+
     port: int = 8000
 
     @field_validator("database_url")
