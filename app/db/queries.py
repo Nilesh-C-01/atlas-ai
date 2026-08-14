@@ -12,7 +12,7 @@ import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
@@ -94,7 +94,19 @@ async def get_memory_facts(db: AsyncSession, user_id: int, limit: int = 20) -> l
     return [{"fact": f.fact, "category": f.category} for f in facts]
 
 
+# Categories that represent a single current-state attribute rather than an
+# accumulating list — restating one (e.g. "actually I'm a founder now")
+# should replace the old fact, not add a second, contradictory-sounding one
+# alongside it (this caused the bot to say "a student ... and a finance
+# professional" after two separate role statements both got kept).
+SINGLETON_FACT_CATEGORIES = {"role"}
+
+
 async def add_memory_fact(db: AsyncSession, user_id: int, fact: str, category: str) -> None:
+    if category in SINGLETON_FACT_CATEGORIES:
+        await db.execute(
+            delete(MemoryFact).where(MemoryFact.user_id == user_id, MemoryFact.category == category)
+        )
     db.add(MemoryFact(user_id=user_id, fact=fact, category=category))
     await db.commit()
 
