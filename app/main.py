@@ -39,6 +39,7 @@ from app.telegram.client import send_message
 from app.telegram.handlers import handle_update
 
 scheduler = AsyncIOScheduler()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -49,7 +50,14 @@ async def lifespan(app: FastAPI):
     # existed) — both are no-ops when there's nothing pending, so this is
     # safe to run on every startup/redeploy, no manual SQL required anymore.
     await init_db()
-    await asyncio.to_thread(run_migrations)
+    try:
+        await asyncio.to_thread(run_migrations)
+    except Exception:
+        # A migration failure must never take the whole bot offline — the
+        # app can still serve every feature that doesn't depend on
+        # whatever column/table didn't get added this time. Log loudly so
+        # it's visible in Railway's logs and gets fixed, but keep starting.
+        logger.exception("run_migrations failed at startup — continuing without it")
     # next_run_time=now makes the first check happen immediately on startup
     # instead of waiting a full interval — otherwise every restart/redeploy
     # opens a dead zone of up to RUN_INTERVAL_MINUTES before briefs/alerts
