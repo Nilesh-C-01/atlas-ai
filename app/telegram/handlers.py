@@ -108,7 +108,22 @@ async def _resolve_incoming(message: dict[str, Any], chat_id: int) -> ResolvedMe
                 document_text=text,
             )
 
-        await send_message(chat_id, "I can read PDFs and spreadsheets (.xlsx/.csv) for now.")
+        if mime_type.startswith("image/"):
+            # An image sent via Telegram's "send as file" option arrives as
+            # a document, not a photo — route it through the same vision
+            # pipeline as the photo branch above rather than rejecting it;
+            # this was previously falling through to the generic
+            # unsupported-type message despite images being fully supported.
+            image_bytes = await download_file(doc["file_id"])
+            if image_bytes is None:
+                await send_message(chat_id, "Couldn't download that image — mind trying again?")
+                return None
+            image_caption = message.get("caption") or "What do you see in this image?"
+            return ResolvedMessage(
+                agent_text=image_caption, db_text=image_caption, image=(image_bytes, mime_type)
+            )
+
+        await send_message(chat_id, "I can read PDFs, spreadsheets (.xlsx/.csv), and images for now.")
         return None
 
     if "text" in message:
