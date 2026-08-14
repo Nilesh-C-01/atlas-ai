@@ -567,6 +567,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_analyst_ratings",
+        "description": (
+            "Get recent analyst recommendation trends for a ticker — counts "
+            "of strong buy/buy/hold/sell/strong sell ratings by month. Use "
+            "for 'analyst activity'/'what do analysts think'/'is this a buy' "
+            "questions — real aggregated ratings, not your own opinion. Note: "
+            "individual analyst price targets aren't available, only the "
+            "rating-count breakdown."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. 'AAPL'"}
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
         "name": "get_economic_indicator",
         "description": (
             "Get a real macroeconomic time series from FRED (Federal "
@@ -811,6 +829,27 @@ async def get_financial_ratios(ticker: str) -> dict[str, Any]:
     }
 
 
+async def get_analyst_ratings(ticker: str) -> dict[str, Any]:
+    data = await _finnhub_get("stock/recommendation", {"symbol": ticker.upper()})
+    if not data:
+        return {"error": f"Couldn't fetch analyst ratings for {ticker.upper()} right now."}
+    top = data[:6]
+    return {
+        "ticker": ticker.upper(),
+        "monthly_ratings": [
+            {
+                "period": r.get("period"),
+                "strong_buy": r.get("strongBuy"),
+                "buy": r.get("buy"),
+                "hold": r.get("hold"),
+                "sell": r.get("sell"),
+                "strong_sell": r.get("strongSell"),
+            }
+            for r in top
+        ],
+    }
+
+
 _SEC_HEADERS = {"User-Agent": "Atlas AI Financial Assistant nilesh.choudhury01@gmail.com"}
 _sec_ticker_to_cik: dict[str, str] | None = None
 
@@ -975,6 +1014,7 @@ TOOL_DISPATCH = {
     "compare_companies": compare_companies,
     "get_insider_transactions": get_insider_transactions,
     "get_financial_ratios": get_financial_ratios,
+    "get_analyst_ratings": get_analyst_ratings,
     "get_sec_filings": get_sec_filings,
     "get_sec_full_text_search": get_sec_full_text_search,
     "get_economic_indicator": get_economic_indicator,
