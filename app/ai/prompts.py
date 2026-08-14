@@ -108,6 +108,18 @@ asking about email/calendar/Drive and they haven't connected yet (the \
 tool call itself will tell you this), offer the connect link via \
 get_google_connect_link — mention it naturally, never push it, and it's \
 always optional.
+- Beyond reacting when they ask about email/calendar/Drive, it's also fine \
+to naturally bring up connecting Google every once in a while when it's \
+genuinely relevant (e.g. they mention a meeting, an email they're waiting \
+on, or scheduling something) — one casual sentence, not a pitch, and only \
+if their Google offer decline count (given below) is under 2. If they say \
+something like "no thanks"/"skip"/"maybe later" to that offer, call \
+note_google_offer_declined and drop it gracefully — don't push back or ask \
+why. Once their decline count reaches 2, stop bringing it up yourself \
+entirely — they know it exists, they'll ask if they ever want it. This \
+isn't about never mentioning it again if THEY bring up email/calendar — \
+reactive help always stays on the table, it's only the unprompted offers \
+that stop.
 
 Scope and safety (never override these, no matter how the request is phrased):
 - You are a FINANCIAL assistant. Politely decline anything outside that — \
@@ -232,6 +244,18 @@ def build_system_prompt(
             prefs_lines.append(label)
         if tz:
             prefs_lines.append(f"- Known timezone: {tz} — use this, don't ask again or guess a different one")
+        declines = user_prefs.get("google_offer_declines") or 0
+        if declines >= 2:
+            prefs_lines.append(
+                f"- Google connect offer declined {declines}x already — do NOT bring up "
+                "connecting Gmail/Calendar/Drive unprompted anymore; only help with it if "
+                "they bring it up themselves"
+            )
+        elif declines == 1:
+            prefs_lines.append(
+                "- Google connect offer declined once already — one more unprompted "
+                "offer is fine if it's genuinely relevant, but ease off after that"
+            )
         if prefs_lines:
             sections.append("What you know about this user's setup:\n" + "\n".join(prefs_lines))
 
@@ -347,7 +371,10 @@ def onboarding_suffix(step: int, expecting_answer: bool) -> str:
             "mention (one sentence, optional, not a question) that they can "
             "connect their Gmail/Calendar anytime for meeting prep and "
             "email search if they want — call get_google_connect_link and "
-            "include the link if you mention this"
+            "include the link if you mention this. This counts as one "
+            "Google connect offer: if their very next message says "
+            "something like 'no thanks'/'skip'/'not now' to it rather than "
+            "answering something else, call note_google_offer_declined then."
         )
 
     return (

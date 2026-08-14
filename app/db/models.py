@@ -34,6 +34,11 @@ class User(Base):
     # 0..N while onboarding is in progress (index into ONBOARDING_QUESTIONS),
     # NULL once finished or skipped — never resumes after that.
     onboarding_step: Mapped[int | None] = mapped_column(nullable=True, default=0)
+    # Times the user has declined/skipped a proactive Gmail/Calendar/Drive
+    # connect offer (onboarding wrap-up counts as one). Capped at 2 in
+    # practice — past that the persona stops offering unprompted so it never
+    # nags; the user can still ask to connect anytime.
+    google_offer_declines: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

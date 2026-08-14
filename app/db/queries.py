@@ -57,6 +57,35 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+def run_migrations() -> None:
+    """Applies any pending Alembic migrations (new columns/tables since the
+    last deploy) — run this once at startup instead of hand-writing ALTER
+    TABLE in Railway's console. Sync on purpose (Alembic's command API is
+    sync; migrations/env.py handles the actual async DB connection itself),
+    so callers on the async startup path must wrap it in asyncio.to_thread."""
+    import pathlib
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy.exc import ProgrammingError
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent.parent
+    cfg = Config(str(repo_root / "alembic.ini"))
+    try:
+        command.upgrade(cfg, "head")
+    except ProgrammingError as exc:
+        # The very first run against a DB that already has these tables
+        # (created pre-Alembic via create_all, e.g. the live Railway DB as
+        # of this migration) has no alembic_version row yet, so it tries to
+        # CREATE TABLE on tables that already exist. Self-heal once: mark
+        # the baseline as already satisfied, then re-run for anything
+        # actually new (like this same deploy's new column).
+        if "already exists" not in str(exc).lower():
+            raise
+        command.stamp(cfg, "0001_baseline")
+        command.upgrade(cfg, "head")
+
+
 async def get_or_create_user(db: AsyncSession, telegram_chat_id: int) -> User:
     result = await db.execute(select(User).where(User.telegram_chat_id == telegram_chat_id))
     user = result.scalar_one_or_none()
@@ -130,7 +159,20 @@ async def add_watchlist_item(db: AsyncSession, user_id: int, ticker: str) -> Non
 
 
 async def get_user_prefs(user: User) -> dict:
-    return {"role": user.role, "briefing_time": user.briefing_time, "timezone": user.timezone}
+    return {
+        "role": user.role,
+        "briefing_time": user.briefing_time,
+        "timezone": user.timezone,
+        "google_offer_declines": user.google_offer_declines,
+    }
+
+
+async def note_google_offer_declined(db: AsyncSession, user_id: int) -> dict:
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one()
+    user.google_offer_declines += 1
+    await db.commit()
+    return {"acknowledged": True, "declines_so_far": user.google_offer_declines}
 
 
 async def set_briefing_time_local(

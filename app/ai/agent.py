@@ -32,6 +32,7 @@ from app.db.queries import (
     get_recent_messages,
     get_user_prefs,
     get_watchlist,
+    note_google_offer_declined,
     set_briefing_time_local,
     set_price_alert,
     set_user_timezone,
@@ -85,6 +86,8 @@ async def _dispatch_tool(name: str, tool_input: dict[str, Any], user: User, db: 
         return {"acknowledged": True}
     if name == "get_google_connect_link":
         return {"link": build_authorize_url(user.telegram_chat_id)}
+    if name == "note_google_offer_declined":
+        return await note_google_offer_declined(db, user.id)
     if name == "search_gmail":
         return await search_gmail(db, user.id, tool_input["query"])
     if name == "list_calendar_events":

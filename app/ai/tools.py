@@ -307,6 +307,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "note_google_offer_declined",
+        "description": (
+            "Call this when the user explicitly declines or skips a "
+            "proactive offer to connect their Google account (Gmail/ "
+            "Calendar/Drive) — e.g. they say 'no thanks', 'skip', 'maybe "
+            "later', 'not now'. Do NOT call this when they haven't been "
+            "offered anything, or when a Google feature failed for an "
+            "unrelated reason. This tracks how many times they've said no "
+            "so you know to stop bringing it up unprompted after a couple "
+            "of skips."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "search_gmail",
         "description": (
             "Search the user's Gmail for messages matching a query. Uses "

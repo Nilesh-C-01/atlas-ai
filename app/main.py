@@ -7,6 +7,7 @@ logic lives in telegram/handlers.py, everything else in its own module.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -17,7 +18,14 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from app.config import settings
-from app.db.queries import SessionLocal, get_user_by_chat_id, init_db, save_google_credential, save_message
+from app.db.queries import (
+    SessionLocal,
+    get_user_by_chat_id,
+    init_db,
+    run_migrations,
+    save_google_credential,
+    save_message,
+)
 from app.integrations.google_oauth import (
     exchange_code_for_tokens,
     expiry_from_token_response,
@@ -33,7 +41,13 @@ scheduler = AsyncIOScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # create_all first so a brand new, empty DB (e.g. fresh local dev) has
+    # every current table before migrations run; run_migrations then applies
+    # anything create_all can't do (new columns on tables that already
+    # existed) — both are no-ops when there's nothing pending, so this is
+    # safe to run on every startup/redeploy, no manual SQL required anymore.
     await init_db()
+    await asyncio.to_thread(run_migrations)
     # next_run_time=now makes the first check happen immediately on startup
     # instead of waiting a full interval — otherwise every restart/redeploy
     # opens a dead zone of up to RUN_INTERVAL_MINUTES before briefs/alerts
