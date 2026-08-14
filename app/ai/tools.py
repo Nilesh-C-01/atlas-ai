@@ -17,6 +17,7 @@ from app.config import settings
 
 FINNHUB_API_KEY = settings.finnhub_api_key
 FINNHUB_BASE = "https://finnhub.io/api/v1"
+FRED_API_KEY = settings.fred_api_key
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +501,86 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["file_id"],
         },
     },
+    {
+        "name": "get_sec_filings",
+        "description": (
+            "Get a company's real recent SEC filings directly from SEC "
+            "EDGAR (form type, filing date, and a direct link to the actual "
+            "filing) — this IS the real regulatory filing record, not a "
+            "news-based proxy. Use for 'SEC filings', '10-K', '10-Q', "
+            "'8-K', or 'regulatory filings' questions. US-listed companies "
+            "only."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. 'AAPL'"},
+                "form_type": {
+                    "type": "string",
+                    "description": "Optional filing type filter, e.g. '10-K', '10-Q', '8-K'. Omit for all recent filings.",
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_insider_transactions",
+        "description": (
+            "Get recent insider buy/sell transactions for a ticker (who, "
+            "how many shares, transaction type, date, price). Use for "
+            "questions about insider trading activity or executive/board "
+            "transactions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. 'AAPL'"}
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_financial_ratios",
+        "description": (
+            "Get key financial ratios and metrics for a ticker — P/E, P/B, "
+            "margins, ROE, current ratio, debt-to-equity, 52-week range, "
+            "and similar. Use for valuation, profitability, or financial-health "
+            "questions that need real ratios rather than raw price/earnings alone."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. 'AAPL'"}
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_economic_indicator",
+        "description": (
+            "Get a real macroeconomic time series from FRED (Federal "
+            "Reserve Economic Data) — e.g. inflation (CPI), unemployment "
+            "rate, Fed funds rate, GDP. Use for questions about economic "
+            "conditions/indicators rather than guessing or relying on news "
+            "headlines alone. If this returns a 'not configured' error, "
+            "tell the user plainly that this data source isn't set up yet "
+            "rather than answering from general knowledge."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "series_id": {
+                    "type": "string",
+                    "description": (
+                        "FRED series ID. Common ones: CPIAUCSL (inflation/CPI), "
+                        "UNRATE (unemployment rate), FEDFUNDS (Fed funds rate), "
+                        "GDP (gross domestic product), DGS10 (10-year Treasury yield)."
+                    ),
+                },
+            },
+            "required": ["series_id"],
+        },
+    },
 ]
 
 
@@ -642,6 +723,133 @@ async def compare_companies(tickers: list[str]) -> dict[str, Any]:
     return {"comparison": dict(pairs)}
 
 
+async def get_insider_transactions(ticker: str) -> dict[str, Any]:
+    data = await _finnhub_get("stock/insider-transactions", {"symbol": ticker.upper()})
+    transactions = (data or {}).get("data")
+    if not transactions:
+        return {"error": f"Couldn't fetch insider transactions for {ticker.upper()} right now."}
+    top = transactions[:10]
+    return {
+        "ticker": ticker.upper(),
+        "transactions": [
+            {
+                "name": t.get("name"),
+                "shares": t.get("share"),
+                "change": t.get("change"),
+                "transaction_date": t.get("transactionDate"),
+                "transaction_code": t.get("transactionCode"),
+                "price": t.get("transactionPrice"),
+            }
+            for t in top
+        ],
+    }
+
+
+async def get_financial_ratios(ticker: str) -> dict[str, Any]:
+    data = await _finnhub_get("stock/metric", {"symbol": ticker.upper(), "metric": "all"})
+    metrics = (data or {}).get("metric")
+    if not metrics:
+        return {"error": f"Couldn't fetch financial ratios for {ticker.upper()} right now."}
+    return {
+        "ticker": ticker.upper(),
+        "pe_ratio_ttm": metrics.get("peBasicExclExtraTTM"),
+        "pb_ratio": metrics.get("pbAnnual"),
+        "roe_ttm": metrics.get("roeTTM"),
+        "roa_ttm": metrics.get("roaTTM"),
+        "gross_margin_ttm": metrics.get("grossMarginTTM"),
+        "net_margin_ttm": metrics.get("netProfitMarginTTM"),
+        "current_ratio": metrics.get("currentRatioAnnual"),
+        "debt_to_equity": metrics.get("totalDebt/totalEquityAnnual"),
+        "52_week_high": metrics.get("52WeekHigh"),
+        "52_week_low": metrics.get("52WeekLow"),
+        "revenue_growth_ttm_yoy": metrics.get("revenueGrowthTTMYoy"),
+    }
+
+
+_SEC_HEADERS = {"User-Agent": "Atlas AI Financial Assistant nilesh.choudhury01@gmail.com"}
+_sec_ticker_to_cik: dict[str, str] | None = None
+
+
+async def _load_sec_ticker_map(client: httpx.AsyncClient) -> dict[str, str]:
+    global _sec_ticker_to_cik
+    if _sec_ticker_to_cik is not None:
+        return _sec_ticker_to_cik
+    resp = await client.get("https://www.sec.gov/files/company_tickers.json", headers=_SEC_HEADERS)
+    resp.raise_for_status()
+    data = resp.json()
+    _sec_ticker_to_cik = {row["ticker"].upper(): str(row["cik_str"]).zfill(10) for row in data.values()}
+    return _sec_ticker_to_cik
+
+
+async def get_sec_filings(ticker: str, form_type: str | None = None) -> dict[str, Any]:
+    ticker = ticker.upper()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ticker_map = await _load_sec_ticker_map(client)
+            cik = ticker_map.get(ticker)
+            if cik is None:
+                return {"error": f"No SEC EDGAR record found for {ticker} — may not be a US-listed company."}
+
+            resp = await client.get(f"https://data.sec.gov/submissions/CIK{cik}.json", headers=_SEC_HEADERS)
+            resp.raise_for_status()
+            recent = resp.json().get("filings", {}).get("recent", {})
+    except (httpx.HTTPError, httpx.TimeoutException):
+        return {"error": f"Couldn't reach SEC EDGAR for {ticker} right now."}
+
+    forms = recent.get("form", [])
+    dates = recent.get("filingDate", [])
+    accessions = recent.get("accessionNumber", [])
+    docs = recent.get("primaryDocument", [])
+
+    filings = []
+    for form, date, accession, doc in zip(forms, dates, accessions, docs):
+        if form_type and form.upper() != form_type.upper():
+            continue
+        accession_no_dashes = accession.replace("-", "")
+        filings.append(
+            {
+                "form": form,
+                "filing_date": date,
+                "url": f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_no_dashes}/{doc}",
+            }
+        )
+        if len(filings) >= 10:
+            break
+
+    if not filings:
+        return {"ticker": ticker, "filings": [], "note": "No matching filings found."}
+    return {"ticker": ticker, "filings": filings}
+
+
+async def get_economic_indicator(series_id: str) -> dict[str, Any]:
+    if not FRED_API_KEY:
+        return {"error": "FRED isn't configured (no API key set) — tell the user this data source isn't available yet."}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id": series_id,
+                    "api_key": FRED_API_KEY,
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit": 6,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except (httpx.HTTPError, httpx.TimeoutException):
+        return {"error": f"Couldn't fetch FRED series {series_id} right now."}
+
+    observations = data.get("observations")
+    if not observations:
+        return {"error": f"No data found for FRED series '{series_id}' — check the series ID."}
+    return {
+        "series_id": series_id,
+        "recent_observations": [{"date": o["date"], "value": o["value"]} for o in observations],
+    }
+
+
 # save_memory_fact is handled entirely in agent.py's _dispatch_tool (it needs
 # a live user_id/db that only agent.py has) — the actual DB write is
 # add_memory_fact in db/queries.py. There's deliberately no implementation
@@ -658,6 +866,10 @@ TOOL_DISPATCH = {
     "get_market_news": get_market_news,
     "get_earnings": get_earnings,
     "compare_companies": compare_companies,
+    "get_insider_transactions": get_insider_transactions,
+    "get_financial_ratios": get_financial_ratios,
+    "get_sec_filings": get_sec_filings,
+    "get_economic_indicator": get_economic_indicator,
     # "read_sheet": read_sheet,           -> bound in agent.py
     # "save_memory_fact"                  -> bound in agent.py (needs user_id/db)
 }

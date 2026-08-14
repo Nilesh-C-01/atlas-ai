@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     google_api_key: str
     finnhub_api_key: str
+    # Optional — economic-indicator tool degrades to a clear "not configured"
+    # error rather than crashing if this is unset.
+    fred_api_key: str = ""
 
     database_url: str
 
