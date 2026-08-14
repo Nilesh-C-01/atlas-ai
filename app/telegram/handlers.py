@@ -4,8 +4,8 @@ telegram/handlers.py
 Routes an incoming Telegram update to the right handling path: text, voice
 notes (transcribed to text via Gemini, then handled like text), photos
 (passed to Gemini vision directly, alongside any caption), and uploaded
-documents — PDFs, plus spreadsheets (.xlsx/.csv) — text extracted, then
-handled like text.
+documents — PDFs, spreadsheets (.xlsx/.csv), and PowerPoint decks (.pptx) —
+text extracted, then handled like text.
 """
 
 from __future__ import annotations
@@ -21,12 +21,30 @@ from app.ai.agent import handle_user_message, transcribe_audio
 from app.ai.prompts import onboarding_suffix
 from app.db.queries import get_or_create_user, get_recent_messages, save_message
 from app.integrations.documents import extract_pdf_text
+from app.integrations.presentations import extract_pptx_text
 from app.integrations.spreadsheets import extract_spreadsheet_text
 from app.telegram.client import download_file, send_message, send_typing_action
 
 LEGACY_EXCEL_MIME = "application/vnd.ms-excel"
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+# How much of an uploaded document's text gets kept in conversation HISTORY
+# (not just the current turn) — this is what lets "compare this to the
+# report I sent earlier" actually work across separate messages, since
+# get_recent_messages naturally bounds how many past documents accumulate
+# (older ones roll off after ~20 messages). Smaller than the per-turn
+# extraction cap (MAX_PDF_CHARS etc.) since this cost gets paid on every
+# later turn until it rolls off, not just once.
+MAX_HISTORY_DOC_CHARS = 4_000
 
 logger = logging.getLogger(__name__)
+
+
+def _doc_db_text(label: str, file_name: str, caption: str, text: str) -> str:
+    snippet = text[:MAX_HISTORY_DOC_CHARS]
+    if len(text) > MAX_HISTORY_DOC_CHARS:
+        snippet += "\n[...truncated for history; full document was used for the initial reply...]"
+    return f"[Uploaded {label}: {file_name}] {caption}\n\n{snippet}"
 
 # Telegram's typing indicator only lasts ~5s per call, so it needs
 # refreshing while a longer Gemini turn (e.g. multi-round tool calls) runs.
@@ -89,7 +107,7 @@ async def _resolve_incoming(message: dict[str, Any], chat_id: int) -> ResolvedMe
                 return None
             return ResolvedMessage(
                 agent_text=caption,
-                db_text=f"[Uploaded PDF: {file_name}] {caption}",
+                db_text=_doc_db_text("PDF", file_name, caption, text),
                 document_text=text,
             )
 
@@ -104,7 +122,22 @@ async def _resolve_incoming(message: dict[str, Any], chat_id: int) -> ResolvedMe
                 return None
             return ResolvedMessage(
                 agent_text=caption,
-                db_text=f"[Uploaded spreadsheet: {file_name}] {caption}",
+                db_text=_doc_db_text("spreadsheet", file_name, caption, text),
+                document_text=text,
+            )
+
+        if mime_type == PPTX_MIME:
+            file_bytes = await download_file(doc["file_id"])
+            if file_bytes is None:
+                await send_message(chat_id, "Couldn't download that presentation — mind trying again?")
+                return None
+            text = extract_pptx_text(file_bytes)
+            if text is None:
+                await send_message(chat_id, "Couldn't extract any text from that deck — is it image-only slides?")
+                return None
+            return ResolvedMessage(
+                agent_text=caption,
+                db_text=_doc_db_text("presentation", file_name, caption, text),
                 document_text=text,
             )
 
@@ -123,7 +156,7 @@ async def _resolve_incoming(message: dict[str, Any], chat_id: int) -> ResolvedMe
                 agent_text=image_caption, db_text=image_caption, image=(image_bytes, mime_type)
             )
 
-        await send_message(chat_id, "I can read PDFs, spreadsheets (.xlsx/.csv), and images for now.")
+        await send_message(chat_id, "I can read PDFs, spreadsheets (.xlsx/.csv), PowerPoint decks (.pptx), and images for now.")
         return None
 
     if "text" in message:
@@ -152,7 +185,7 @@ async def handle_update(update: dict[str, Any], db: AsyncSession) -> None:
             if not any(t in message for t in known_types):
                 await send_message(
                     chat_id,
-                    "I can only read text, voice notes, photos, PDFs, and spreadsheets for now.",
+                    "I can only read text, voice notes, photos, PDFs, spreadsheets, and presentations for now.",
                 )
             return
 
