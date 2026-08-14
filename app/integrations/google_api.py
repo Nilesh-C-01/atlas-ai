@@ -186,13 +186,19 @@ async def search_drive_files(db, user_id: int, query: str, max_results: int = 5)
 
     headers = {"Authorization": f"Bearer {token}"}
     safe_query = _escape_drive_query_literal(query)
+    # fullText searches file CONTENT (Drive indexes text inside Docs,
+    # Sheets, Slides, PDFs with a text layer, and plain text files), not
+    # just the file name — so "find the doc that mentions Q3 revenue" can
+    # match a file whose name gives no hint of that, not only an exact
+    # filename match.
+    drive_query = f"(name contains '{safe_query}' or fullText contains '{safe_query}') and trashed = false"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{DRIVE_BASE}/files",
                 headers=headers,
                 params={
-                    "q": f"name contains '{safe_query}' and trashed = false",
+                    "q": drive_query,
                     "pageSize": max_results,
                     "fields": "files(id,name,mimeType,webViewLink)",
                 },

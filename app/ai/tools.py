@@ -146,7 +146,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "description": (
             "Read the contents of a Google Sheet from a shared link and return "
             "its data so it can be analyzed. Use when the user shares a Google "
-            "Sheets URL and asks a question about it."
+            "Sheets URL and asks a question about it. The result includes BOTH "
+            "raw CSV text (for qualitative reading, may be truncated on a huge "
+            "sheet) AND computed_stats — exact count/sum/mean/min/max plus "
+            "outliers (values outside the normal IQR range) per numeric "
+            "column, computed from the FULL sheet regardless of truncation. "
+            "For any sum/average/total/anomaly/outlier question, use "
+            "computed_stats — never count or add up numbers yourself from the "
+            "raw text, that's unreliable and exactly what computed_stats exists "
+            "to avoid."
         ),
         "input_schema": {
             "type": "object",
@@ -460,17 +468,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "search_drive_files",
         "description": (
-            "Search the user's Google Drive by file name — e.g. 'find that "
-            "earnings deck', 'search my drive for the due diligence doc'. "
-            "Returns file names, types, and IDs; use read_drive_file with "
-            "the id to actually read one. Requires a connected Google account."
+            "Search the user's Google Drive by file name AND by content — "
+            "e.g. 'find that earnings deck', 'search my drive for the due "
+            "diligence doc', or 'find the file that mentions Q3 revenue' "
+            "(content search covers Docs, Sheets, Slides, PDFs with a text "
+            "layer, and plain text files). Returns file names, types, and "
+            "IDs; use read_drive_file with the id to actually read one. "
+            "Requires a connected Google account."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search text to match against file names",
+                    "description": "Search text to match against file names or file content",
                 },
             },
             "required": ["query"],
