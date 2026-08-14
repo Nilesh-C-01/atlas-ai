@@ -70,12 +70,35 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+async def _detect_current_revision() -> str:
+    """Inspects the live schema to figure out which migration's state the
+    DB actually matches — used only as a one-time self-heal (see
+    run_migrations) when alembic_version is missing/stale, so the recovery
+    itself never depends on guessing rather than reality."""
+    from sqlalchemy import inspect
+
+    async with engine.connect() as conn:
+        def _check(sync_conn):
+            insp = inspect(sync_conn)
+            tables = set(insp.get_table_names())
+            if "reminders" in tables:
+                return "0003_reminders_and_watchlist_extras"
+            if "users" in tables:
+                user_cols = {c["name"] for c in insp.get_columns("users")}
+                if "google_offer_declines" in user_cols:
+                    return "0002_google_offer_declines"
+            return "0001_baseline"
+
+        return await conn.run_sync(_check)
+
+
 def run_migrations() -> None:
     """Applies any pending Alembic migrations (new columns/tables since the
     last deploy) — run this once at startup instead of hand-writing ALTER
     TABLE in Railway's console. Sync on purpose (Alembic's command API is
     sync; migrations/env.py handles the actual async DB connection itself),
     so callers on the async startup path must wrap it in asyncio.to_thread."""
+    import asyncio
     import pathlib
 
     from alembic import command
@@ -87,15 +110,18 @@ def run_migrations() -> None:
     try:
         command.upgrade(cfg, "head")
     except ProgrammingError as exc:
-        # The very first run against a DB that already has these tables
-        # (created pre-Alembic via create_all, e.g. the live Railway DB as
-        # of this migration) has no alembic_version row yet, so it tries to
-        # CREATE TABLE on tables that already exist. Self-heal once: mark
-        # the baseline as already satisfied, then re-run for anything
-        # actually new (like this same deploy's new column).
+        # alembic_version is missing or stale relative to what actually
+        # exists (e.g. the very first run against a DB created pre-Alembic
+        # via create_all, or two instances briefly racing during a rolling
+        # deploy) — self-heal by inspecting the REAL schema and stamping to
+        # whichever migration that state actually matches, never a fixed
+        # guess (blindly stamping "0001_baseline" regardless of true state
+        # previously corrupted the version pointer into a permanent crash
+        # loop on any later "already exists" error, however it arose).
         if "already exists" not in str(exc).lower():
             raise
-        command.stamp(cfg, "0001_baseline")
+        detected = asyncio.run(_detect_current_revision())
+        command.stamp(cfg, detected)
         command.upgrade(cfg, "head")
 
 
