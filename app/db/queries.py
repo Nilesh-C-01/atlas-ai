@@ -74,15 +74,23 @@ async def _detect_current_revision() -> str:
     """Inspects the live schema to figure out which migration's state the
     DB actually matches — used only as a one-time self-heal (see
     run_migrations) when alembic_version is missing/stale, so the recovery
-    itself never depends on guessing rather than reality."""
+    itself never depends on guessing rather than reality. Checks a COLUMN
+    each revision actually adds to an existing table, not just whether a
+    brand new table exists — a new table can exist without its owning
+    migration ever having run, since create_all() creates any table that's
+    missing from the DB but absent from Base.metadata, independent of
+    Alembic's bookkeeping (this is exactly what caused watchlist_items'
+    0003 columns to be silently skipped once)."""
     from sqlalchemy import inspect
 
     async with engine.connect() as conn:
         def _check(sync_conn):
             insp = inspect(sync_conn)
             tables = set(insp.get_table_names())
-            if "reminders" in tables:
-                return "0003_reminders_and_watchlist_extras"
+            if "watchlist_items" in tables:
+                watchlist_cols = {c["name"] for c in insp.get_columns("watchlist_items")}
+                if "alert_move_percent" in watchlist_cols:
+                    return "0003_reminders_watchlist"
             if "users" in tables:
                 user_cols = {c["name"] for c in insp.get_columns("users")}
                 if "google_offer_declines" in user_cols:
