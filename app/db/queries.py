@@ -16,7 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.db.models import Base, GoogleCredential, MemoryFact, Message, User, WatchlistItem
+from app.db.models import Base, GoogleCredential, MemoryFact, Message, Reminder, User, WatchlistItem
 
 # Common non-IANA labels models might pass despite being asked for an IANA
 # name — mapped here so a plain "IST"/"EST" from the model doesn't fail
@@ -47,6 +47,19 @@ def resolve_timezone(raw: str) -> ZoneInfo | None:
         return ZoneInfo(candidate)
     except (ZoneInfoNotFoundError, ValueError):
         return None
+
+
+def user_local_now(user: User, utc_now: datetime.datetime) -> datetime.datetime:
+    """Resolves 'now' in the user's own timezone, freshly, every call — the
+    shared basis for anything comparing against a user's local wall-clock
+    time (daily brief due-check, reminder due-check). Falls back to UTC if
+    no/invalid timezone is on file."""
+    if user.timezone:
+        tz = resolve_timezone(user.timezone)
+        if tz is not None:
+            return utc_now.astimezone(tz)
+    return utc_now
+
 
 engine = create_async_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
@@ -239,6 +252,47 @@ async def mark_alert_sent(db: AsyncSession, item_id: int, clear_target: bool) ->
     item.last_alert_sent_at = func.now()
     if clear_target:
         item.alert_price = None
+    await db.commit()
+
+
+async def set_custom_move_alert(db: AsyncSession, user_id: int, ticker: str, percent: float) -> dict:
+    ticker = ticker.strip().upper()
+    result = await db.execute(
+        select(WatchlistItem).where(WatchlistItem.user_id == user_id, WatchlistItem.ticker == ticker)
+    )
+    item = result.scalar_one_or_none()
+    if item is None:
+        item = WatchlistItem(user_id=user_id, ticker=ticker)
+        db.add(item)
+    item.alert_move_percent = percent
+    await db.commit()
+    return {"set": True, "ticker": ticker, "move_percent": percent}
+
+
+async def mark_news_checked(db: AsyncSession, item_id: int, checked_at: datetime.datetime) -> None:
+    result = await db.execute(select(WatchlistItem).where(WatchlistItem.id == item_id))
+    item = result.scalar_one()
+    item.last_news_check_at = checked_at
+    await db.commit()
+
+
+async def create_reminder(db: AsyncSession, user_id: int, remind_at_local: str, message: str) -> dict:
+    db.add(Reminder(user_id=user_id, remind_at_local=remind_at_local, message=message))
+    await db.commit()
+    return {"set": True, "remind_at_local": remind_at_local}
+
+
+async def get_pending_reminders(db: AsyncSession) -> list[Reminder]:
+    result = await db.execute(
+        select(Reminder).where(Reminder.sent.is_(False)).options(selectinload(Reminder.user))
+    )
+    return list(result.scalars().all())
+
+
+async def mark_reminder_sent(db: AsyncSession, reminder_id: int) -> None:
+    result = await db.execute(select(Reminder).where(Reminder.id == reminder_id))
+    reminder = result.scalar_one()
+    reminder.sent = True
     await db.commit()
 
 

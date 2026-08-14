@@ -89,11 +89,44 @@ class WatchlistItem(Base):
     last_alert_sent_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Overrides price_alerts.py's default 5% daily-move threshold for this
+    # one ticker when the user explicitly asks for a custom percentage.
+    alert_move_percent: Mapped[float | None] = mapped_column(nullable=True)
+    # Last time watchlist_news.py checked this ticker for fresh headlines —
+    # NULL means "never checked yet", used to establish a baseline on the
+    # first pass instead of blasting every existing headline as if it were
+    # breaking news the moment a ticker is added.
+    last_news_check_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     user: Mapped["User"] = relationship(back_populates="watchlist_items")
+
+
+class Reminder(Base):
+    """One-off (non-recurring) reminders the user asks for, e.g. 'remind me
+    an hour before Apple's earnings call'. Separate from briefing_time
+    (recurring, HH:MM only) and price alerts (deterministic, no message
+    text) — this is an arbitrary future local moment plus free text."""
+
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    # "YYYY-MM-DD HH:MM" in the user's OWN local time, same storage
+    # philosophy as briefing_time — resolved to UTC fresh at check-time via
+    # the user's stored timezone so DST never causes drift.
+    remind_at_local: Mapped[str] = mapped_column(String(20))
+    sent: Mapped[bool] = mapped_column(default=False, server_default="false")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship()
 
 
 class GoogleCredential(Base):

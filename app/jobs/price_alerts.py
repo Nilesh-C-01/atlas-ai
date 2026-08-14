@@ -63,7 +63,8 @@ async def check_watchlist_item(db, item) -> None:
 
     if not _already_alerted_recently(item.last_alert_sent_at):
         percent_change = quote["percent_change"]
-        if abs(percent_change) >= DAILY_MOVE_THRESHOLD_PERCENT:
+        threshold = item.alert_move_percent if item.alert_move_percent is not None else DAILY_MOVE_THRESHOLD_PERCENT
+        if abs(percent_change) >= threshold:
             direction = "up" if percent_change > 0 else "down"
             message = (
                 f"{item.ticker} is {direction} {abs(percent_change):.1f}% today, "

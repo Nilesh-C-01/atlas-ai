@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from app.ai.agent import handle_user_message
 from app.ai.prompts import DAILY_BRIEF_SYSTEM_SUFFIX
-from app.db.queries import SessionLocal, get_users_with_watchlist, resolve_timezone, save_message
+from app.db.queries import SessionLocal, get_users_with_watchlist, save_message, user_local_now
 from app.telegram.client import send_message
 
 logger = logging.getLogger(__name__)
@@ -34,19 +34,6 @@ BRIEF_KICKOFF = (
     "Generate today's proactive daily brief for this user, using their "
     "watchlist and tools to check live prices/news as needed."
 )
-
-
-def _user_local_now(user, utc_now: datetime) -> datetime:
-    """Resolves 'now' in the user's own timezone, freshly, on every call —
-    this is what makes DST handled correctly with zero stored-offset drift,
-    unlike caching a precomputed UTC target time would. Falls back to UTC
-    if no/invalid timezone is on file, matching briefing_time's own
-    fallback assumption in that case."""
-    if user.timezone:
-        tz = resolve_timezone(user.timezone)
-        if tz is not None:
-            return utc_now.astimezone(tz)
-    return utc_now
 
 
 def _is_due(briefing_time: str | None, local_now: datetime) -> bool:
@@ -83,5 +70,5 @@ async def daily_brief_job() -> None:
     async with SessionLocal() as db:
         users = await get_users_with_watchlist(db)
         for user in users:
-            if _is_due(user.briefing_time, _user_local_now(user, now)):
+            if _is_due(user.briefing_time, user_local_now(user, now)):
                 await run_daily_brief_for_user(db, user)

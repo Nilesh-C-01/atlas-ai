@@ -79,9 +79,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "get_earnings",
         "description": (
-            "Get upcoming or recent earnings data for a ticker: report date, "
-            "EPS estimate vs actual, revenue estimate vs actual. Use for "
-            "earnings-related questions."
+            "Get recent + next earnings data for a ticker: report date, "
+            "EPS estimate vs actual, revenue estimate vs actual, and — for "
+            "the next upcoming report — the market session it's expected in "
+            "('bmo' = before market open, 'amc' = after market close, 'dmh' "
+            "= during market hours). There is NO earnings call transcript "
+            "or audio/text summary of what was actually SAID on the call — "
+            "if asked to 'summarize the call', be upfront that you only "
+            "have the numbers, not the call content itself, then summarize "
+            "what you do have (the figures, beat/miss, and any related "
+            "news via get_news) rather than inventing call commentary. The "
+            "'hour' field is a session label, not an exact clock time — if "
+            "asked to time something relative to it (e.g. a reminder), say "
+            "so plainly and treat it as an estimate."
         ),
         "input_schema": {
             "type": "object",
@@ -267,6 +277,63 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["ticker", "target_price"],
+        },
+    },
+    {
+        "name": "set_custom_move_alert",
+        "description": (
+            "Override the default 5% daily-move alert threshold for one "
+            "ticker on the watchlist. Every tracked ticker already alerts "
+            "automatically at a 5% daily move — only call this when the "
+            "user explicitly asks for a DIFFERENT percentage, e.g. 'alert "
+            "me if TSLA moves more than 3% in a day'. Also adds the ticker "
+            "to the watchlist if it isn't already there."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol, e.g. 'TSLA'",
+                },
+                "percent": {
+                    "type": "number",
+                    "description": "The daily move threshold in percent, e.g. 3 for 3%",
+                },
+            },
+            "required": ["ticker", "percent"],
+        },
+    },
+    {
+        "name": "set_reminder",
+        "description": (
+            "Schedule a one-off reminder message for a specific future local "
+            "date/time, e.g. 'remind me an hour before Apple's earnings "
+            "call' or 'remind me tomorrow at 3pm to check on NVDA'. Requires "
+            "knowing the user's timezone first (from stored prefs or ask "
+            "them) — never guess it. Figure out the exact target date/time "
+            "yourself from the current date/time given to you, the user's "
+            "request, and (if relevant) real data from another tool call "
+            "like get_earnings — do the simple arithmetic yourself (e.g. "
+            "'earnings is amc on 2026-01-28, so remind 1 hour before my "
+            "best estimate of that session's end, and say it's an "
+            "estimate'), don't ask the user to do the math. This is for a "
+            "single future moment, not a recurring daily thing — for a "
+            "recurring daily briefing use set_briefing_time instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "local_datetime": {
+                    "type": "string",
+                    "description": "Target date/time in the user's own local time, format 'YYYY-MM-DD HH:MM' (24h)",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "What to remind them about — short, plain text",
+                },
+            },
+            "required": ["local_datetime", "message"],
         },
     },
     {
@@ -533,12 +600,36 @@ async def get_market_news(category: str = "general") -> dict[str, Any]:
 
 
 async def get_earnings(ticker: str) -> dict[str, Any]:
-    data = await _finnhub_get(
-        "stock/earnings", {"symbol": ticker.upper()}
-    )
+    import datetime
+
+    data = await _finnhub_get("stock/earnings", {"symbol": ticker.upper()})
     if not data:
         return {"error": f"Couldn't fetch earnings data for {ticker.upper()}."}
-    return {"ticker": ticker.upper(), "recent_earnings": data[:4]}
+
+    result: dict[str, Any] = {"ticker": ticker.upper(), "recent_earnings": data[:4]}
+
+    # Look ahead ~120 days for the next scheduled report — the free
+    # calendar/earnings endpoint only gives a date + session label (bmo/amc/
+    # dmh), never an exact clock time.
+    today = datetime.date.today()
+    calendar = await _finnhub_get(
+        "calendar/earnings",
+        {
+            "from": today.isoformat(),
+            "to": (today + datetime.timedelta(days=120)).isoformat(),
+            "symbol": ticker.upper(),
+        },
+    )
+    upcoming = (calendar or {}).get("earningsCalendar") or []
+    if upcoming:
+        next_report = upcoming[0]
+        result["next_earnings"] = {
+            "date": next_report.get("date"),
+            "session": next_report.get("hour"),  # "bmo" | "amc" | "dmh" — not an exact time
+            "eps_estimate": next_report.get("epsEstimate"),
+            "revenue_estimate": next_report.get("revenueEstimate"),
+        }
+    return result
 
 
 async def compare_companies(tickers: list[str]) -> dict[str, Any]:

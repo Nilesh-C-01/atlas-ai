@@ -14,6 +14,7 @@ FunctionDeclaration format at import time below.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from google import genai
@@ -28,12 +29,14 @@ from app.db.queries import (
     add_memory_fact,
     add_watchlist_item,
     advance_onboarding,
+    create_reminder,
     get_memory_facts,
     get_recent_messages,
     get_user_prefs,
     get_watchlist,
     note_google_offer_declined,
     set_briefing_time_local,
+    set_custom_move_alert,
     set_price_alert,
     set_user_timezone,
 )
@@ -54,6 +57,10 @@ MODEL = "gemini-3.1-flash-lite"
 MAX_TOOL_ROUNDS = 5
 
 logger = logging.getLogger(__name__)
+
+# Same format reminders.py's job expects — validated here so a malformed
+# value fails loudly at set time instead of silently never firing later.
+REMIND_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}$")
 
 GEMINI_TOOLS = types.Tool(
     function_declarations=[
@@ -81,6 +88,12 @@ async def _dispatch_tool(name: str, tool_input: dict[str, Any], user: User, db: 
     if name == "set_price_alert":
         await set_price_alert(db, user.id, tool_input["ticker"], tool_input["target_price"])
         return {"set": True, "note": "this also added the ticker to their watchlist, if not already on it"}
+    if name == "set_custom_move_alert":
+        return await set_custom_move_alert(db, user.id, tool_input["ticker"], tool_input["percent"])
+    if name == "set_reminder":
+        if not REMIND_AT_RE.match(tool_input["local_datetime"]):
+            return {"error": "local_datetime must be exactly 'YYYY-MM-DD HH:MM' (24h) — reformat and retry"}
+        return await create_reminder(db, user.id, tool_input["local_datetime"], tool_input["message"])
     if name == "continue_onboarding":
         await advance_onboarding(db, user.id, tool_input["stop"], len(ONBOARDING_QUESTIONS))
         return {"acknowledged": True}

@@ -33,6 +33,8 @@ from app.integrations.google_oauth import (
 )
 from app.jobs.daily_brief import RUN_INTERVAL_MINUTES, daily_brief_job
 from app.jobs.price_alerts import RUN_INTERVAL_MINUTES as PRICE_ALERT_INTERVAL_MINUTES, price_alert_job
+from app.jobs.reminders import RUN_INTERVAL_MINUTES as REMINDER_INTERVAL_MINUTES, reminder_job
+from app.jobs.watchlist_news import RUN_INTERVAL_MINUTES as WATCHLIST_NEWS_INTERVAL_MINUTES, watchlist_news_job
 from app.telegram.client import send_message
 from app.telegram.handlers import handle_update
 
@@ -66,6 +68,18 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         price_alert_job,
         IntervalTrigger(minutes=PRICE_ALERT_INTERVAL_MINUTES),
+        next_run_time=datetime.now(),
+        misfire_grace_time=None,
+    )
+    scheduler.add_job(
+        watchlist_news_job,
+        IntervalTrigger(minutes=WATCHLIST_NEWS_INTERVAL_MINUTES),
+        next_run_time=datetime.now(),
+        misfire_grace_time=None,
+    )
+    scheduler.add_job(
+        reminder_job,
+        IntervalTrigger(minutes=REMINDER_INTERVAL_MINUTES),
         next_run_time=datetime.now(),
         misfire_grace_time=None,
     )
