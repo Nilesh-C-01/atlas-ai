@@ -592,6 +592,40 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["series_id"],
         },
     },
+    {
+        "name": "get_sec_full_text_search",
+        "description": (
+            "Search the full TEXT of SEC filings (not just filing "
+            "metadata) via EDGAR's full-text search — real filings only, "
+            "since ~2001. Each result includes an 'items' field listing "
+            "the SEC item codes triggered (e.g. '5.02' = officer/director "
+            "departure or election = LEADERSHIP CHANGE, '1.01' = entry "
+            "into a material agreement, '2.01' = completion of "
+            "acquisition/disposition = M&A). Use this for leadership "
+            "changes, M&A, and funding/material-agreement questions — "
+            "there's no dedicated 'leadership changes' or 'M&A' data feed, "
+            "this real filing search is the grounded way to answer those. "
+            "If nothing relevant turns up, say so — don't guess."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search phrase, e.g. 'chief executive officer resignation', 'merger agreement'",
+                },
+                "ticker": {
+                    "type": "string",
+                    "description": "Optional — scope the search to one company's filings",
+                },
+                "form_types": {
+                    "type": "string",
+                    "description": "Optional comma-separated form types to filter, e.g. '8-K' or '8-K,10-K'",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -832,6 +866,68 @@ async def get_sec_filings(ticker: str, form_type: str | None = None) -> dict[str
     return {"ticker": ticker, "filings": filings}
 
 
+# SEC 8-K item codes that commonly answer "leadership change" / "M&A" /
+# "material agreement" questions — surfaced so the model doesn't have to
+# guess what a code means.
+_SEC_ITEM_LABELS = {
+    "1.01": "Entry into a Material Definitive Agreement",
+    "1.02": "Termination of a Material Definitive Agreement",
+    "2.01": "Completion of Acquisition or Disposition of Assets",
+    "2.02": "Results of Operations and Financial Condition",
+    "5.02": "Departure/Election of Directors or Officers (leadership change)",
+    "5.03": "Amendments to Articles of Incorporation/Bylaws",
+    "7.01": "Regulation FD Disclosure",
+    "8.01": "Other Events",
+}
+
+
+async def get_sec_full_text_search(
+    query: str, ticker: str | None = None, form_types: str | None = None
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"q": query}
+    if form_types:
+        params["forms"] = form_types
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if ticker:
+                ticker_map = await _load_sec_ticker_map(client)
+                cik = ticker_map.get(ticker.upper())
+                if cik is None:
+                    return {"error": f"No SEC EDGAR record found for {ticker.upper()} — may not be a US-listed company."}
+                params["ciks"] = cik
+
+            resp = await client.get(
+                "https://efts.sec.gov/LATEST/search-index", params=params, headers=_SEC_HEADERS
+            )
+            resp.raise_for_status()
+            hits = resp.json().get("hits", {}).get("hits", [])
+    except (httpx.HTTPError, httpx.TimeoutException):
+        return {"error": "Couldn't reach SEC EDGAR full-text search right now."}
+
+    if not hits:
+        return {"query": query, "results": [], "note": "No matching filings found."}
+
+    results = []
+    for hit in hits[:10]:
+        source = hit.get("_source", {})
+        accession_no_dashes = hit.get("_id", "").split(":")[0].replace("-", "")
+        primary_doc = hit.get("_id", "").split(":")[-1] if ":" in hit.get("_id", "") else ""
+        cik_for_url = (source.get("ciks") or [""])[0].lstrip("0") or "0"
+        items = source.get("items") or []
+        results.append(
+            {
+                "company": (source.get("display_names") or [None])[0],
+                "form": source.get("form"),
+                "filing_date": source.get("file_date"),
+                "items": items,
+                "item_meanings": [_SEC_ITEM_LABELS.get(i) for i in items if i in _SEC_ITEM_LABELS],
+                "url": f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{accession_no_dashes}/{primary_doc}",
+            }
+        )
+    return {"query": query, "results": results}
+
+
 async def get_economic_indicator(series_id: str) -> dict[str, Any]:
     if not FRED_API_KEY:
         return {"error": "FRED isn't configured (no API key set) — tell the user this data source isn't available yet."}
@@ -880,6 +976,7 @@ TOOL_DISPATCH = {
     "get_insider_transactions": get_insider_transactions,
     "get_financial_ratios": get_financial_ratios,
     "get_sec_filings": get_sec_filings,
+    "get_sec_full_text_search": get_sec_full_text_search,
     "get_economic_indicator": get_economic_indicator,
     # "read_sheet": read_sheet,           -> bound in agent.py
     # "save_memory_fact"                  -> bound in agent.py (needs user_id/db)
