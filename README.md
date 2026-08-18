@@ -4,7 +4,9 @@ Atlas is a Telegram-native financial analyst. No commands, no menus, no buttons 
 
 Built for the Humanity Founders "Atlas AI Financial Assistant Hackathon."
 
-**Live bot:** message it on Telegram — no source code required to evaluate, per the hackathon's own submission rules. This README exists anyway, because a serious product deserves a serious README.
+**Live bot:** message it on Telegram at https://t.me/atlast01_bot — no source code required to evaluate, per the hackathon's own submission rules. This README exists anyway, because a serious product deserves a serious README.
+
+
 
 ---
 
